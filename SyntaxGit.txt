@@ -1,0 +1,571 @@
+# # Read SPSS files and so on
+library(foreign)
+# # Automate Mplus
+library(MplusAutomation)
+# # String package
+library(stringr)
+# # Make plots
+library(ggplot2)
+# # Merge plots
+library(gridExtra)
+# # Make latex tables
+library(xtable)
+# # Rename
+library(car)
+# # Read .gh5 files
+library(rhdf5)
+# # alpha e.d.
+library(psych)
+# # Training sets
+library(caret)
+# # reform data frames
+library(reshape2)
+# # Mplus functies
+source("http://www.statmodel.com/mplus-R/mplus.R")
+ 
+# # Own function to compute BRMSEA
+bayes.rmsea <- function(file,nvar=6,ms=TRUE,cil=.05,cih=.95,allout=FALSE,
+                        pD=NULL,N=NULL,Min1=TRUE){
+  Obs <- mplus.get.bayesian.predictive.observed(file,"Chi-square values")
+  Rep <- mplus.get.bayesian.predictive.replicated(file,"Chi-square values")
+#   if(is.na(Obs)){
+#     if(allout) out <- NA
+#     if(!allout) out <- c(NA,NA)    
+#   }
+  
+  if(is.null(pD) & is.null(N)){
+    sum <- extractModelSummaries(gsub("gh5","out",file))
+    pD  <- sum$pD
+    N   <- sum$Observations
+  }
+  
+  if(ms)  p <- (((nvar * (nvar + 1))/2) + nvar)
+  if(!ms) p <- (((nvar * (nvar + 1))/2) + 0)
+  
+  df <- p - pD
+  
+  nonc <- ( ( Obs-Rep ) - df )
+  nonc[ nonc<0 ] <- 0
+  if(Min1) RMSEA <- sqrt( nonc / ( df * (N -1) ) )
+  if(!Min1) RMSEA <- sqrt( nonc / ( df * N ) )
+  
+  RMSEA_ci <- quantile(RMSEA, probs = c(cil,cih))
+  if(allout) out <- RMSEA
+  if(!allout) out <- RMSEA_ci
+  out
+}
+ 
+# # Set WD
+setwd("D:\\MplusHuub")
+# # Save Base WD
+base_dir <- getwd()
+
+# # Replications
+replicat <- 500
+ 
+# # Sort of models included
+Model    <- c("correct","almostcorrect","approximate","misspecified","horrible")
+# # Different samples used
+Sample   <- c(50,100,250,500,1000,5000,10000)
+# # Different loadings used
+Loadings <- c(.3,.5,.7)
+# # Different indicators used
+Indicators <- c(6,12)
+ 
+# # Confidence Intervals Widths of the BRMSEA (90%)
+LB <- .05
+UB <- .95
+ 
+# # Prior variances
+PriorV_Loading   <- .05
+PriorV_Intercept <- .05
+ 
+# # Sort conditions
+sort_cond  <- expand.grid(Model,Sample,Loadings,Indicators,stringsAsFactors = FALSE)
+ 
+colnames(sort_cond) <- c("Model","SampleSize","Loadings","Indicators")
+ 
+# # List of models belonging to to each condition
+MontCarModels <- list()
+ 
+for(i in 1:nrow(sort_cond)){
+  # # Title etc. the same for each condition (except numbers e.d.)
+  MontCarInp <-
+    paste("TITLE:\n",
+          "\t Model; ",sort_cond[i,"Model"],"\n",
+          "\t Sample Size; ",sort_cond[i,"SampleSize"],"\n",
+          "\t Loadings; ",sort_cond[i,"Loadings"],"\n",
+          "\t Indicators; ",sort_cond[i,"Indicators"],"\n",
+          "\n",
+          "MONTECARLO:\n",
+          "\t Names = y1-y",sort_cond[i,"Indicators"],";\n",
+          "\t Nobs = ", sort_cond[i,"SampleSize"]," ;\n",
+          "\t Nreps = ", replicat," ;\n",
+          "\t Save = ",  "file_*.txt ;\n", 
+          "\t Repsave = 1-",replicat,";\n", 
+          "\t Results = results.txt;\n", 
+          "\n",
+          "ANALYSIS:\n",
+          "\t Processors = 8 ;\n",
+          "\n",
+          "\t Model population:\n",sep="")
+  
+  # # Models for six indicators
+  if(sort_cond[i,"Indicators"] == 6){
+    
+    # # If model is correct
+    if(sort_cond[i,"Model"] == "correct"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," y3@",sort_cond[i,"Loadings"],
+              " y4@",sort_cond[i,"Loadings"]," y5@",sort_cond[i,"Loadings"]," y6@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t y1-y6@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",sep="")
+    }
+    
+    # # If model is almost correct
+    if(sort_cond[i,"Model"] == "almostcorrect"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," y3@",sort_cond[i,"Loadings"],
+              " y4@",sort_cond[i,"Loadings"]," y5@",sort_cond[i,"Loadings"]," y6@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t y1-y6@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",
+              "\t \t y1 WITH y2@.1 ;\n",
+              sep="")
+    }
+    
+    # # If model is approximate
+    if(sort_cond[i,"Model"] == "approximate"){
+      MontCarMode <-
+       paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," y3@",sort_cond[i,"Loadings"],
+              " y4@",sort_cond[i,"Loadings"]," y5@",sort_cond[i,"Loadings"]," y6@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t y1-y6@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",
+              "\t \t y1 WITH y2@.1 ;\n",
+              "\t \t y3 WITH y4@.1 ;\n",
+              "\t \t y5 WITH y6@.1 ;\n",
+              sep="")
+    }
+    
+    # # If model is misspecified
+    if(sort_cond[i,"Model"] == "misspecified"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," y3@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t F2 by y4@",sort_cond[i,"Loadings"]," y5@",sort_cond[i,"Loadings"]," y6@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t y1-y6@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",
+              "\t \t F2@1 ;\n",
+              "\t \t F1 WITH F2@.5 ;\n",
+              sep="")
+    }
+    
+    # If model is horrible
+    if(sort_cond[i,"Model"] == "horrible"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t F2 by y3@",sort_cond[i,"Loadings"]," y4@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t F3 by y5@",sort_cond[i,"Loadings"]," y6@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t y1-y6@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",
+              "\t \t F2@1 ;\n",
+              "\t \t F3@1 ;\n",
+              "\t \t F1-F3 WITH F1-F3 @.25 ;\n",
+              sep="")
+    }
+  }
+  
+  # # Models for 12 indicators
+  if(sort_cond[i,"Indicators"] == 12){
+    
+    # # If model is correct
+    if(sort_cond[i,"Model"] == "correct"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," y3@",sort_cond[i,"Loadings"],
+              " y4@",sort_cond[i,"Loadings"], " y5@",sort_cond[i,"Loadings"], " y6@",sort_cond[i,"Loadings"]," \n",
+              " y7@",sort_cond[i,"Loadings"], " y8@",sort_cond[i,"Loadings"], " y9@",sort_cond[i,"Loadings"],
+              " y10@",sort_cond[i,"Loadings"]," y11@",sort_cond[i,"Loadings"]," y12@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t y1-y12@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",sep="")
+    }
+    
+    # # If model is almost correct
+    if(sort_cond[i,"Model"] == "almostcorrect"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," y3@",sort_cond[i,"Loadings"],
+              " y4@",sort_cond[i,"Loadings"], " y5@",sort_cond[i,"Loadings"], " y6@",sort_cond[i,"Loadings"]," \n",
+              " y7@",sort_cond[i,"Loadings"], " y8@",sort_cond[i,"Loadings"], " y9@",sort_cond[i,"Loadings"],
+              " y10@",sort_cond[i,"Loadings"]," y11@",sort_cond[i,"Loadings"]," y12@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t y1-y12@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",
+              "\t \t y1 WITH y2@.1 ;\n",
+              sep="")
+    }
+    
+    # # If model is approximate
+    if(sort_cond[i,"Model"] == "approximate"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," y3@",sort_cond[i,"Loadings"],
+              " y4@",sort_cond[i,"Loadings"], " y5@",sort_cond[i,"Loadings"], " y6@",sort_cond[i,"Loadings"]," \n",
+              " y7@",sort_cond[i,"Loadings"], " y8@",sort_cond[i,"Loadings"], " y9@",sort_cond[i,"Loadings"],
+              " y10@",sort_cond[i,"Loadings"]," y11@",sort_cond[i,"Loadings"]," y12@",sort_cond[i,"Loadings"]," ;\n",
+              "\t \t y1-y12@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",
+              "\t \t y1  WITH y2@.1  ;\n",
+              "\t \t y3  WITH y4@.1  ;\n",
+              "\t \t y5  WITH y6@.1  ;\n",
+              "\t \t y7  WITH y8@.1  ;\n",
+              "\t \t y9  WITH y10@.1 ;\n",
+              "\t \t y11 WITH y12@.1 ;\n",
+              sep="")
+    }
+    
+    # # If model is misspecified
+    if(sort_cond[i,"Model"] == "misspecified"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"]," y3@",sort_cond[i,"Loadings"],
+              " y4@",sort_cond[i,"Loadings"], " y5@",sort_cond[i,"Loadings"], " y6@",sort_cond[i,"Loadings"],"; \n",
+              "\t \t F2 by y7@",sort_cond[i,"Loadings"]," y8@",sort_cond[i,"Loadings"]," y9@",sort_cond[i,"Loadings"],
+              " y10@",sort_cond[i,"Loadings"], " y11@",sort_cond[i,"Loadings"], " y12@",sort_cond[i,"Loadings"],"; \n",
+              "\t \t y1-y12@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",
+              "\t \t F2@1 ;\n",
+              "\t \t F1 WITH F2@.5 ;\n",
+              sep="")
+    }
+    
+    # # Is model is horrible
+    if(sort_cond[i,"Model"] == "horrible"){
+      MontCarMode <-
+        paste("\t \t F1 by y1@",sort_cond[i,"Loadings"]," y2@",sort_cond[i,"Loadings"], " y3@",sort_cond[i,"Loadings"], " y4@",sort_cond[i,"Loadings"], " ;\n",
+              "\t \t F2 by y5@",sort_cond[i,"Loadings"]," y6@",sort_cond[i,"Loadings"], " y7@",sort_cond[i,"Loadings"], " y8@",sort_cond[i,"Loadings"], " ;\n",
+              "\t \t F3 by y9@",sort_cond[i,"Loadings"]," y10@",sort_cond[i,"Loadings"]," y11@",sort_cond[i,"Loadings"]," y12@",sort_cond[i,"Loadings"], " ;\n",
+              "\t \t y1-y12@",1-sort_cond[i,"Loadings"]^2," ;\n",
+              "\t \t F1@1 ;\n",
+              "\t \t F2@1 ;\n",
+              "\t \t F3@1 ;\n",
+              "\t \t F1-F3 WITH F1-F3 @.25 ;\n",
+              sep="")
+    }
+  }
+  
+  # # Save each model (per condition)
+  MontCarInp <- paste(MontCarInp,MontCarMode)
+  
+  # # Store each model (per condition)
+  MontCarModels[[i]] <- MontCarInp
+}
+ 
+# # Design formulas to generate input files
+ 
+# # BSEM without informative priors
+ModelInput <-
+  function(title_inp,num_inp,ind_inp,bit_inp=NULL,tech8=FALSE){
+        paste("TITLE:\n", 
+              "\t ", title_inp, "\n", 
+              "\n", 
+              "DATA:\n", 
+              "\t File = ", "file_", num_inp, ".txt;\n",
+              "\n",
+              "VARIABLE:\n",
+              "\t Names = y1-y",ind_inp ,";\n",
+              "\n",
+              "ANALYSIS:\n",
+              "\t Estimator = BAYES ;\n",
+              "\t Processors = 8 ;\n",
+              "\t Chains = 8 ;\n",
+              "\t Biterations = 20000 (5000) ; \n",
+              "\t Bconvergence = .01 ; \n",
+              # "\t !Bseed = ", num_inp," ;\n",
+              "\n",
+              "MODEL:\n",
+              "\t F1 by y1-y",ind_inp,"* ;\n",
+              "\t F1@1 ;\n",
+              "\n",
+              "PLOT:\n",
+              "\t Type = Plot2 ; \n",
+              "\n",
+              "OUTPUT:\n",
+              "\t Tech8 ;",
+              sep="")
+  }
+ 
+# # BSEM with informative priors (variance .05)
+ModelInputStInf <-
+  function(title_inp,num_inp,ind_inp,load_inp,bit_inp=NULL){
+    paste("TITLE:\n", 
+          "\t ", title_inp, " Strong Informative Prior\n", 
+          "\n", 
+          "DATA:\n", 
+          "\t File = ", "file_", num_inp, ".txt;\n",
+          "\n",
+          "VARIABLE:\n",
+          "\t Names = y1-y",ind_inp ,";\n",
+          "\n",
+          "ANALYSIS:\n",
+          "\t Estimator = BAYES ;\n",
+          "\t Processors = 8 ;\n",
+          "\t Chains = 8 ;\n",
+          "\t Biterations = 20000 (5000) ; \n",
+          "\t Bconvergence = .01 ; \n",
+          # "\t !Bseed = ", num_inp," ;\n",
+          "\n",
+          "MODEL:\n",
+          "\t F1 by y1-y",ind_inp,"* (p1-p",ind_inp ,") ;\n",
+          "\t [y1-y",ind_inp,"*] (t1-t",ind_inp ,") ;\n",
+          "\t F1@1 ;\n",
+          # "\t y1-y",ind_inp,"* (r1-r",ind_inp ,") ;\n", 
+          "\n",
+          "\t Model priors:\n",
+          "\t p1-p",ind_inp," ~ N(", load_inp, ", ", PriorV_Loading, ") ;\n",
+          "\t t1-t",ind_inp," ~ N(0, ", PriorV_Intercept, ") ;\n",
+          # "\t r1-r",ind_inp," ~ N(",1-(load_inp^2), ", 0.05) ;\n", 
+          "\n",
+          "PLOT:\n",
+          "\t Type = Plot2 ; \n",
+          "\n",
+          "OUTPUT:\n",
+          "\t Tech8 ;",
+          sep="")
+  }
+ 
+ModelInputML <-
+  function(title_inp,num_inp,ind_inp){
+    paste("TITLE:\n", 
+          "\t ", title_inp, " ML \n", 
+          "\n", 
+          "DATA:\n", 
+          "\t File = ", "file_", num_inp, ".txt;\n",
+          "\n",
+          "VARIABLE:\n",
+          "\t Names = y1-y",ind_inp ,";\n",
+          "\n",
+          "ANALYSIS:\n",
+          "\t Estimator = ML ;\n",
+          "\t Processors = 8 ;\n",
+          "\n",
+          "MODEL:\n",
+          "\t F1 by y1-y",ind_inp,"* ;\n",
+          "\t F1@1 ;\n",
+          sep="")
+  }
+
+
+sel <- 1:nrow(sort_cond)
+ 
+bit10 <- list()
+length(bit10) <- nrow(sort_cond)
+ 
+setwd(base_dir)
+ 
+# # MontCar Plus Uniformative
+for(i in sel){
+  if(i != 0){
+  print(paste("start:",i,".X.X",sep=""))
+  
+  # # Create condition label
+  condlabel <- gsub("0[.]","l",paste(sort_cond[i,],collapse = "_"))
+  
+  # # Create and set path
+  path_rel <- paste(base_dir, condlabel , sep="/")
+  dir.create(path_rel, showWarnings = FALSE)
+  setwd(path_rel) 
+  
+  # # Create and run simulation file
+  fileConn <- file(paste(condlabel,".inp",sep=""))
+  writeLines(MontCarModels[[i]], fileConn)
+  runModels(recursive = FALSE,replaceOutfile = "modifiedDate") 
+  
+  # # Remove input file to easen computations
+  file.remove(paste(condlabel,".inp",sep=""))
+  
+  # # Close file connection
+  close(fileConn)
+  
+  # # Uniformative Correct
+  for(l in 1:replicat){
+    fileComm <- file(paste(condlabel,"_",l,".inp",sep=""))
+    writeLines(ModelInput(title_inp =  paste("Model; ",sort_cond[i,"Model"],"\n",
+                                             "\t Sample Size; ",sort_cond[i,"SampleSize"],"\n",
+                                             "\t Loadings; ",sort_cond[i,"Loadings"],"\n",
+                                             "\t Indicators; ",sort_cond[i,"Indicators"],"\n",                                            
+                                             sep=""),
+                          num_inp = l,ind_inp = sort_cond[i,"Indicators"], bit_inp = NULL), fileComm)
+    close(fileComm)
+  } 
+  
+  
+  # # Informative Correct
+  print(paste("start:",i,".X.X",sep=""))
+  for(l in 1:replicat){
+    fileComm <- file(paste("StInf_", condlabel,"_",l,".inp",sep=""))
+    writeLines(ModelInputStInf(title_inp =  paste("Model; ",sort_cond[i,"Model"],"\n",
+                                                  "\t Sample Size; ",sort_cond[i,"SampleSize"],"\n",
+                                                  "\t Loadings; ",sort_cond[i,"Loadings"],"\n",
+                                                  "\t Indicators; ",sort_cond[i,"Indicators"],"\n",                                            
+                                                  sep=""),
+                               num_inp = l,ind_inp = sort_cond[i,"Indicators"], load_inp = sort_cond[i,"Loadings"], bit_inp = NULL), fileComm)
+    close(fileComm)
+  } 
+  
+  
+  # # ML
+  print(paste("start:",i,".X.X",sep=""))
+  for(l in 1:replicat){
+    fileComm <- file(paste("ML_", condlabel,"_",l,".inp",sep=""))
+    writeLines(ModelInputML(title_inp =  paste("Model; ",sort_cond[i,"Model"],"\n",
+                                               "\t Sample Size; ",sort_cond[i,"SampleSize"],"\n",
+                                               "\t Loadings; ",sort_cond[i,"Loadings"],"\n",
+                                               "\t Indicators; ",sort_cond[i,"Indicators"],"\n",                                            
+                                               sep=""),
+                            num_inp = l,ind_inp = sort_cond[i,"Indicators"]), fileComm)
+    close(fileComm)
+  } 
+  
+  closeAllConnections()
+  
+  # # Run all models
+  print("RUN MODELS:")
+  runModels(recursive = TRUE,replaceOutfile = "always", showOutput = FALSE)
+  
+  # # Read all models
+  print("READ MODELS:")
+  summar <- extractModelSummaries(target = path_rel, recursive = FALSE)
+ 
+  # # Extract models per estimator
+  ResultsUninf <- summar[str_detect(summar$Filename,pattern = paste("\\b",condlabel,"_",sep="")),]
+  sort_condResultsUninf <- ResultsUninf[,colSums(is.na(ResultsUninf))!=nrow(ResultsUninf)]
+  
+  ResultsML <- summar[str_detect(summar$Filename,pattern = paste("ml_",condlabel,"_",sep="")),]
+  sort_condResultsML <- ResultsML[,colSums(is.na(ResultsML))!=nrow(ResultsML)]
+  
+  ResultsStInf <- summar[str_detect(summar$Filename,pattern = paste("stinf_",condlabel,"_",sep="")),]
+  sort_condResultsStInf <- ResultsStInf[,colSums(is.na(ResultsStInf))!=nrow(ResultsStInf)]
+  
+  print("RMSEA:")
+  # # Uninformative BRMSEA extraction and discrepant posterior for chains
+  sort_condRMSEAUninf <- list()
+  length(sort_condRMSEAUninf) <- nrow(sort_condResultsUninf)
+  
+  sort_condConvUninf <- list()
+  length(sort_condConvUninf) <- nrow(sort_condResultsUninf)
+  
+  for(j in 1:nrow(sort_condResultsUninf)){
+    # print(j)
+    # Extract discrepant posterior distributions in the different MCMC chains
+    fileComm <- file(sort_condResultsUninf[j,"Filename"],open = "r")
+    itt <- readLines(fileComm)
+    dis <- any(str_detect(itt,pattern = "INDICATING DISCREPANT POSTERIOR DISTRIBUTIONS IN THE DIFFERENT MCMC CHAINS"))
+    
+   Beg <- which(str_detect(itt,pattern = "ITERATION") & str_detect(itt,pattern = "HIGHEST PSR") & str_detect(itt,pattern = "SCALE REDUCTION"))
+    Ein <- which(nchar(itt[Beg:length(itt)]) == 0)[1]
+    Ein <- Ein + Beg
+ 
+   conv_ps <- matrix(as.numeric(unlist(regmatches( itt[Beg:(Ein)],gregexpr("[[:digit:]]+\\.*[[:digit:]]*", itt[Beg:(Ein)])))),byrow = T,ncol=3)
+
+   sort_condConvUninf[[j]] <- list(dis,conv_ps)
+ 
+   # # Extract gh5 output (replicated and observed chi-square)
+    if(is.na(sort_condResultsUninf[j,"PostPred_PValue"])){sort_condRMSEAUninf[[j]] <- NA } else {
+    ext_pD <- sort_condResultsUninf[j,"pD"]
+    if(is.na(ext_pD)) {
+       disloc <- which(str_detect(itt,pattern = "Estimated Number of Parameters"))
+       ext_pD <- as.numeric(unlist(regmatches( itt[disloc],gregexpr("[[:digit:]]+\\.*[[:digit:]]*", itt[disloc]))))
+	}
+    rmsea.out <- bayes.rmsea(file = gsub("out", "gh5", sort_condResultsUninf[j,"Filename"]), 
+                             nvar = sort_cond[i,"Indicators"],
+                             ms = TRUE,
+                             cil = LB,cih = UB,allout = TRUE,
+                             pD = ext_pD,
+                             N= sort_cond[i,"SampleSize"])
+    sort_condRMSEAUninf[[j]] <- rmsea.out
+    H5close()
+    }
+    
+
+    
+    closeAllConnections()
+  }
+  
+  names(sort_condRMSEAUninf) <- sort_condResultsUninf[,"Filename"]
+ 
+  names(sort_condConvUninf) <- sort_condResultsUninf[,"Filename"]
+ 
+  # # Informative RMSEA extraction
+  sort_condRMSEAStinf <- list()
+  length(sort_condRMSEAStinf) <- nrow(sort_condResultsStInf)
+  
+  sort_condConvStinf <- list()
+  length(sort_condConvStinf) <- nrow(sort_condResultsUninf)
+  
+  for(j in 1:nrow(sort_condResultsStInf)){
+
+   # Extract discrepant posterior distributions in the different MCMC chains
+    fileComm <- file(sort_condResultsStInf[j,"Filename"],open = "r")
+    itt <- readLines(fileComm)
+    dis <- any(str_detect(itt,pattern = "INDICATING DISCREPANT POSTERIOR DISTRIBUTIONS IN THE DIFFERENT MCMC CHAINS"))
+ 
+    Beg <- which(str_detect(itt,pattern = "ITERATION") & str_detect(itt,pattern = "HIGHEST PSR") & str_detect(itt,pattern = "SCALE REDUCTION"))
+    Ein <- which(nchar(itt[Beg:length(itt)]) == 0)[1]
+    Ein <- Ein + Beg
+ 
+    conv_ps <- matrix(as.numeric(unlist(regmatches( itt[Beg:(Ein)],gregexpr("[[:digit:]]+\\.*[[:digit:]]*", itt[Beg:(Ein)])))),byrow = T,ncol=3)
+    sort_condConvStinf[[j]] <- list(dis,conv_ps)   
+    # # Extract gh5 output (replicated and observed chi-square)}
+    if(is.na(sort_condResultsStInf[j,"PostPred_PValue"])){sort_condRMSEAStinf[[j]] <- NA } else {
+    ext_pD <- sort_condResultsStInf[j,"pD"]
+    if(is.na(ext_pD)) {
+       disloc <- which(str_detect(itt,pattern = "Estimated Number of Parameters"))
+       ext_pD <- as.numeric(unlist(regmatches( itt[disloc],gregexpr("[[:digit:]]+\\.*[[:digit:]]*", itt[disloc]))))
+	}
+    rmsea.out <- bayes.rmsea(file = gsub("out", "gh5", sort_condResultsStInf[j,"Filename"]), 
+                             nvar = sort_cond[i,"Indicators"],
+                             ms = TRUE,
+                             cil = LB,cih = UB,allout = TRUE,
+                             pD = ext_pD,
+                             N= sort_cond[i,"SampleSize"])
+    sort_condRMSEAStinf[[j]] <- rmsea.out
+    H5close()
+    }
+  
+
+   closeAllConnections()
+    
+  }
+  
+ names(sort_condRMSEAStinf) <- sort_condResultsStInf[,"Filename"]
+ 
+ names(sort_condConvStinf) <- sort_condResultsStInf[,"Filename"]
+ 
+  # # 7-zip all files (with four processors)
+  CMD_Line1 <- paste('CMD /C "cd ', path_rel,' && set path="D:\\Users\\Huub\\Downloads\\7za920";%path% && 7za -m0=lzma2 -mmt=4 -r -mx1 a -t7z ', condlabel,'.7z &&  PAUSE"',sep="")
+  system(CMD_Line1,invisible=TRUE, wait=TRUE, show.output.on.console = FALSE)
+  
+  # # Move the file towards an external hard disk
+  CMD_Line2 <- paste('CMD /C "cd ', path_rel,' && move ', condlabel,'.7z f:/sim2015mar/',condlabel,'.7z &&  PAUSE"',sep="")
+  system(CMD_Line2,invisible=FALSE, wait=TRUE, show.output.on.console = TRUE)
+ 
+  # # Remove all files in the original file location
+  file.remove(dir())
+  
+  # # Save all summary statistics in the original file location
+  save(sort_condResultsStInf,file = "sort_condResultsStInf.Rdata")
+  save(sort_condResultsML   ,file = "sort_condResultsML.Rdata")
+  save(sort_condResultsUninf,file = "sort_condResultsUninf.Rdata")
+  
+  save(sort_condRMSEAUninf  ,file = "sort_condRMSEAUninf.Rdata")
+  save(sort_condRMSEAStinf,  file = "sort_condRMSEAStinf.Rdata")
+  
+  save(sort_condConvUninf,  file = "sort_condConvUninf.Rdata")
+  save(sort_condConvStinf,  file = "sort_condConvStinf.Rdata")
+ 
+  # # Set base dir as dir
+  CMD_Line3 <- paste('CMD /C "cd ', base_dir,' &&  PAUSE"',sep="")
+  system(CMD_Line3,invisible=FALSE, wait=TRUE, show.output.on.console = TRUE)
+  
+  setwd(base_dir)
+  
+  # # CLose all connections
+  closeAllConnections()
+  }
+}
+
+
